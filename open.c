@@ -7,6 +7,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+#include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,7 +18,7 @@ typedef struct {
   pid_t pid;
 } subprocess_t;
 
-void launch_child_process (char* const* argv, int fdpipe) {
+void launch_child_process (const char* filename, char* const* argv, int fdpipe) {
   /* Read all open file descriptors with our parent's help. We cannot do this
    * in the child's forked process, because this code could be called from a
    * multithreaded application or library. In that case, the code in between a
@@ -65,7 +66,7 @@ int feed_child_process (pid_t pid, int fdpipe) {
   int ret = 0;
 
   /* Open the child process' /proc file descriptor directory. */
-  DIR* fddir = open_proc_fd(proc.pid);
+  DIR* fddir = open_proc_fd(pid);
   if (!fddir) {
     perror("open_proc_fd");
     return -1;
@@ -122,7 +123,7 @@ subprocess_t open_subprocess (const char* filename, char* const* argv) {
     return proc;
   }
   else if (0 == proc.pid) {
-    launch_child_process(argv, fdpipe[READ]);
+    launch_child_process(filename, argv, fdpipe[READ]);
     abort();  // never reached
   }
 
