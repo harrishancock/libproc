@@ -16,8 +16,9 @@
 
 typedef struct {
   pid_t pid;
-} subprocess_t;
+} proc_t;
 
+/* All code in this function must be async-signal-safe (see signal(7)). */
 void launch_child_process (const char* filename, char* const* argv, int fdpipe) {
   /* Read all open file descriptors with our parent's help. We cannot do this
    * in the child's forked process, because this code could be called from a
@@ -28,23 +29,20 @@ void launch_child_process (const char* filename, char* const* argv, int fdpipe) 
   int fd;
   while ((nread = read(fdpipe, &fd, sizeof(fd)))) {
     if (-1 == nread || nread != sizeof(fd)) {
-      write(STDERR_FILENO, "fuck\n", sizeof("fuck\n"));
+      perror("child read");
+      return;
     }
-    else if (2 < fd && fdpipe != fd) {
-      if (-1 == close(fd)) {
-        write(STDERR_FILENO, "fuck2\n", sizeof("fuck2\n"));
+    else if (2 < fd) {
+      if (-1 == fcntl(fd, F_SETFD, FD_CLOEXEC)) {
+        perror("child fcntl");
+        return;
       }
     }
   }
 
-  /* One last file descriptor to close. */
-  if (-1 == close(fdpipe)) {
-    write(STDERR_FILENO, "fuck4\n", sizeof("fuck4\n"));
-  }
-
   /* Execute the new process. */
   if (-1 == execve(filename, argv, NULL)) {
-    write(STDERR_FILENO, "fuck3\n", sizeof("fuck3"));
+    perror("child execve");
   }
 }
 
@@ -100,9 +98,8 @@ int feed_child_process (pid_t pid, int fdpipe) {
   return ret;
 }
 
-
-subprocess_t open_subprocess (const char* filename, char* const* argv) {
-  subprocess_t proc = {
+proc_t proc_open (const char* filename, char* const* argv) {
+  proc_t proc = {
     .pid = -1,
   };
 
@@ -120,26 +117,35 @@ subprocess_t open_subprocess (const char* filename, char* const* argv) {
 
   proc.pid = fork();
   if (-1 == proc.pid) {
+    close(fdpipe[READ]);
+    close(fdpipe[WRITE]);
     return proc;
   }
   else if (0 == proc.pid) {
+    if (-1 == close(fdpipe[WRITE])) {
+      perror("close");
+      abort();
+    }
     launch_child_process(filename, argv, fdpipe[READ]);
     abort();  // never reached
+  }
+
+  if (-1 == close(fdpipe[READ])) {
+    /* Do something. Do we care? */
   }
 
   if (-1 == feed_child_process(proc.pid, fdpipe[WRITE])) {
     /* Do something. Do we care? */
   }
 
-  if (-1 == close(fdpipe[WRITE]) ||
-      -1 == close(fdpipe[READ])) {
+  if (-1 == close(fdpipe[WRITE])) {
     /* Do something. Do we care? */
   }
 
   return proc;
 }
 
-int close_subprocess (subprocess_t proc) {
+int proc_close (proc_t proc) {
   int status;
   waitpid(proc.pid, &status, 0);
   return WEXITSTATUS(status);
@@ -153,8 +159,8 @@ int main () {
     NULL
   };
 
-  subprocess_t proc = open_subprocess("/bin/sh", myargv);
-  close_subprocess(proc);
+  proc_t proc = proc_open("/bin/sh", myargv);
+  proc_close(proc);
 
   for (int i = 0; i < sizeof(myargv) / sizeof(myargv[0]); ++i) {
     free(myargv[i]);
